@@ -139,10 +139,10 @@ def main():
             new_error_massage = f'Сбой в работе программы: {error}'
             logging.error(new_error_massage)
             if new_error_massage != old_massage:
-                old_massage == new_error_massage
                 try:
                     send_message(bot, 'Сбой в работе программы: '
                                  f'{new_error_massage}')
+                    old_massage == new_error_massage
                 except (
                     ApiException,
                     requests.exceptions.RequestException
