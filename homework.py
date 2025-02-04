@@ -2,12 +2,14 @@ import logging
 import os
 import time
 import sys
+from http import HTTPStatus
 
 import requests
 from dotenv import load_dotenv
-from http import HTTPStatus
 from telebot import TeleBot
 from telebot.apihelper import ApiException
+
+from exceptions import StatusApi
 
 
 load_dotenv()
@@ -35,11 +37,10 @@ def check_tokens(required_env_vars: list):
     """Проверяет наличие всех необходимых переменных окружения."""
     missing_vars = [var for var in required_env_vars if not globals()[var]]
     if missing_vars:
-        logging.critical(
+        raise ValueError(
             'Принудительная остановка программы из-за отсутствия '
             f'необходимых переменных окружения.{", ".join(missing_vars)}'
         )
-        raise ValueError
 
 
 def send_message(bot: TeleBot, message: str):
@@ -61,14 +62,12 @@ def get_api_answer(timestamp: int):
         )
 
     except requests.RequestException as e:
-        error_message = f'Ошибка при запросе к API: {e}'
-        logging.error(error_message)
-        raise ConnectionError(error_message)
+        raise ConnectionError(f'Ошибка при запросе к API: {e}')
 
     if homework_statuses.status_code != HTTPStatus.OK:
-        error_message = f'Статус ответа равен {homework_statuses.status_code} '
-        ' а не 200'
-        raise ConnectionError(error_message)
+        raise StatusApi(
+            f'Статус ответа равен {homework_statuses.status_code} а не 200'
+        )
 
     return homework_statuses.json()
 
@@ -88,7 +87,7 @@ def check_response(response: dict):
     if not isinstance(response[field], list):
         raise TypeError(
             f'Поле "{field}" имеет неверный тип данных. '
-            f'Ожидалось {list}, '
+            'Ожидалось list, '
             f'получено {type(response[field]).__name__}.'
         )
     logging.info('Ответ API соответствует документации.')
@@ -100,22 +99,25 @@ def parse_status(homework: dict):
     keys_homework = ['homework_name', 'status']
     no_key = [key for key in keys_homework if not homework.get(key)]
     if no_key:
-        raise KeyError(f'Нет ключей"{no_key}".')
-    homework_name = homework.get('homework_name')
-    status_work = homework.get('status')
+        raise KeyError(f'Нет ключей:"{", ".join(no_key)}".')
+    homework_name = homework['homework_name']
+    status_work = homework['status']
     if status_work not in HOMEWORK_VERDICTS:
-        raise ValueError('Неожиданный статус домашней работы.')
+        raise ValueError(f'Неожиданный статус домашней работы: {status_work}.')
     verdict = HOMEWORK_VERDICTS.get(str(status_work))
     return f'Изменился статус проверки работы "{homework_name}". {verdict}'
 
 
 def main():
     """Основная логика работы бота."""
-    check_tokens(REQUIRED_ENV_VARS)
+    try:
+        check_tokens(REQUIRED_ENV_VARS)
+    except ValueError as e:
+        logging.critical(e)
+        sys.exit()
     bot = TeleBot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
-    old_error_massage = ''
-    new_error_massage = ''
+    old_massage = ''
     while True:
         try:
             response = get_api_answer(timestamp - RETRY_PERIOD)
@@ -125,21 +127,26 @@ def main():
                 logging.debug('Изменение статуса работы отсутствует.')
                 continue
             message = parse_status(homework[0])
-            send_message(bot, message)
-            timestamp = response['current_date']
+            if message != old_massage:
+                send_message(bot, message)
+                old_massage = message
+            timestamp = response.get('current_date', timestamp)
 
         except (ApiException, requests.exceptions.RequestException) as e:
             logging.error(f'Ошибка при работе с Telegram или сетью: {e}')
 
         except Exception as error:
-            new_error_massage = error
-            logging.error(f'Сбой в работе программы: {error}')
-            if new_error_massage != old_error_massage:
-                old_error_massage == new_error_massage
+            new_error_massage = f'Сбой в работе программы: {error}'
+            logging.error(new_error_massage)
+            if new_error_massage != old_massage:
+                old_massage == new_error_massage
                 try:
                     send_message(bot, 'Сбой в работе программы: '
                                  f'{new_error_massage}')
-                except Exception as e:
+                except (
+                    ApiException,
+                    requests.exceptions.RequestException
+                ) as e:
                     logging.error(
                         f'Не удалось отправить сообщение об ошибке: {e}')
 
