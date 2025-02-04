@@ -108,16 +108,33 @@ def parse_status(homework: dict):
     return f'Изменился статус проверки работы "{homework_name}". {verdict}'
 
 
-def main():
-    """Основная логика работы бота."""
+def check_and_send_message(bot: TeleBot, message: str, old_message: str):
+    """Сравнивает новое сообщение со старым и отправляет его.
+    Возвращает старое сообщение.
+    """
+    if message != old_message:
+        send_message(bot, message)
+        old_message = message
+    return old_message
+
+
+def check_token_or_exit():
+    """Проверяет токены.
+    Закрывает программу, если чего-то нет.
+    """
     try:
         check_tokens(REQUIRED_ENV_VARS)
     except ValueError as e:
         logging.critical(e)
         sys.exit()
+
+
+def main():
+    """Основная логика работы бота."""
+    check_token_or_exit()
     bot = TeleBot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
-    old_massage = ''
+    old_message = ''
     while True:
         try:
             response = get_api_answer(timestamp - RETRY_PERIOD)
@@ -127,9 +144,7 @@ def main():
                 logging.debug('Изменение статуса работы отсутствует.')
                 continue
             message = parse_status(homework[0])
-            if message != old_massage:
-                send_message(bot, message)
-                old_massage = message
+            old_message = check_and_send_message(bot, message, old_message)
             timestamp = response.get('current_date', timestamp)
 
         except (ApiException, requests.exceptions.RequestException) as e:
@@ -138,11 +153,11 @@ def main():
         except Exception as error:
             new_error_massage = f'Сбой в работе программы: {error}'
             logging.error(new_error_massage)
-            if new_error_massage != old_massage:
+            if new_error_massage != old_message:
                 try:
                     send_message(bot, 'Сбой в работе программы: '
                                  f'{new_error_massage}')
-                    old_massage == new_error_massage
+                    old_message == new_error_massage
                 except (
                     ApiException,
                     requests.exceptions.RequestException
